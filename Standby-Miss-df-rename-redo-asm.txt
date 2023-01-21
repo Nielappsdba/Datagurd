@@ -259,7 +259,7 @@ File Size(MB) Tablespace           RB segs Datafile Name
 1    8124     SYSTEM               ***     +FLASH/QMES/DATAFILE/system.316.1116121003
 2    5124     USERS                ***     +FLASH/QMES/DATAFILE/users.336.1116121057
 3    10240    SYSAUX               ***     +FLASH/QMES/DATAFILE/sysaux.300.1116120825
-. Due long output the truncate other files name.
+. Due long output truncate other files name.
 .
 37   0        SHAPE_HYP_TPSS       ***     +FLASH/QME/DATAFILE/shape_hyp_tpss.357.1121414575
 38   0        SHAPE_HYP_TPSS       ***     +FLASH/QME/DATAFILE/shape_hyp_tpss.358.1121414655
@@ -374,7 +374,7 @@ Standby Redo logs ====> this is not current status but i have to drop the stanad
          7          1 UNASSIGNED       4294967296
          8          2 UNASSIGNED       4294967296
          9          2 UNASSIGNED         4294967296
-UX00816P:(SYS@QMES:PHYSICAL STANDBY>
+UX00xxxP:(SYS@QMES:PHYSICAL STANDBY>
 
 24)Standby DB site :Drop the STANDBY redolog and recreate with new location .
 ALTER DATABASE CLEAR LOGFILE GROUP &a;
@@ -394,7 +394,7 @@ Non-ASM
 alter database add standby logfile thread 1 group 5 '/u01/oradata/standby_redo01.log' size 524288000;
 
 
-UX00816P:(SYS@QMES:PHYSICAL STANDBY> select group#, thread#, status, bytes from v$standby_log;
+UX00xxxP:(SYS@QMES:PHYSICAL STANDBY> select group#, thread#, status, bytes from v$standby_log;
 
     GROUP#    THREAD# STATUS                BYTES
 ---------- ---------- ---------------- ----------
@@ -420,7 +420,7 @@ for eg group 5 contained only one standby redlog member.
 
 Now lets corrected the Online redo log error messages which are coming on alertlog.
 
-UX00816P:(SYS@QMES:PHYSICAL STANDBY>  select group#, thread#, status, bytes from v$log;
+UX00xxP:(SYS@QMES:PHYSICAL STANDBY>  select group#, thread#, status, bytes from v$log;
 
     GROUP#    THREAD# STATUS                BYTES
 ---------- ---------- ---------------- ----------
@@ -481,7 +481,7 @@ I bounce standby DB and started again in Mount state.
 
 Still no luck Redo log still show current.
 
-UX00816P:(SYS@QMES:PHYSICAL STANDBY> select group#, thread#, status, bytes from v$log;
+UX00xxP:(SYS@QMES:PHYSICAL STANDBY> select group#, thread#, status, bytes from v$log;
 
     GROUP#    THREAD# STATUS                BYTES
 ---------- ---------- ---------------- ----------
@@ -514,7 +514,7 @@ UX00816P:(SYS@QMES:PHYSICAL STANDBY> select GROUP#,THREAD#,MEMBERS,STATUS from V
          2          1          1 UNUSED
          3          2          1 UNUSED
          4          2          1 UNUSED
-UX00816P:(SYS@QMES:PHYSICAL STANDBY> select member,TYPE,STATUS from v$logfile
+UX00xxP:(SYS@QMES:PHYSICAL STANDBY> select member,TYPE,STATUS from v$logfile
   2  where type='ONLINE';
 
 MEMBER                                            TYPE    STATUS
