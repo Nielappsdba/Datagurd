@@ -1,0 +1,339 @@
+To Resolve the Standby database Gap.
+
+Please use cksum command to verify the size of password file on the primary and the standby sites, and make sure SEC_CASE_SENSITIVE_LOGON  is set to false for 11g or above databases.
+ % cd $ORACLE_HOME/dbs
+
+   % cksum <password file name>               /* cksum command is only available on the UNIX platform  */
+
+orapwd file=$ORACLE_HOME/dbs/orapw<ORACLE_SID> password=<sys password> ignorecase=y entries=5
+
+===============================================================================================================================================================================================
+on prim & standby
+select name, open_mode, database_role from v$database;
+
+
+on primary 
+
+select thread#, sequence#, applied from v$archived_log where dest_id='2' and applied='NO' order by thread#, sequence#;
+SELECT DESTINATION, STATUS, ERROR FROM V$ARCHIVE_DEST WHERE DEST_ID=2;
+
+select thread#, max(sequence#) "Last Primary Seq Generated"
+from v$archived_log val, v$database vdb
+where val.resetlogs_change# = vdb.resetlogs_change#
+group by thread# order by 1;
+
+
+=============================================================================================================================================================================================
+on both prim & standby
+select * from v$diag_info;
+select max(sequence#) from v$log_history;
+===============================================================================================================================================================================================
+last sequence applied on standby
+
+ ps -ef |grep -i mrp 
+ 
+ select process, thread#, sequence#, status from v$managed_standby where process='MRP0';
+ 
+select thread#, max(sequence#) "Last Standby Seq Received"
+from v$archived_log val, v$database vdb
+where val.resetlogs_change# = vdb.resetlogs_change#
+group by thread# order by 1;
+
+select thread#, max(sequence#) "Last Standby Seq Applied"
+from v$archived_log val, v$database vdb
+where val.resetlogs_change# = vdb.resetlogs_change#
+and applied='YES'
+group by thread# order by 1;
+		   
+	or
+select thread#, max(sequence#) from v$archived_log where applied='NO' group by thread#;
+
+Last Sequnce generated on standby.
+
+SELECT THREAD# "Thread",SEQUENCE# "Last Sequence Generated"
+FROM V$ARCHIVED_LOG
+WHERE (THREAD#,FIRST_TIME ) IN (SELECT THREAD#,MAX(FIRST_TIME) FROM V$ARCHIVED_LOG GROUP BY THREAD#)
+ORDER BY 1 
+
+select * from v$archived_log where applied = ‘YES’ and
+completion_time>sysdate-1 order by name; 
+
+==============================================================================================================================================================================
+
+
+Showing the Gap prim and standby database.
+
+SELECT ARCH.THREAD# "Thread", ARCH.SEQUENCE# "Last Sequence Received",
+APPL.SEQUENCE# "Last Sequence Applied", (ARCH.SEQUENCE# - APPL.SEQUENCE#) "Difference"
+FROM
+(SELECT THREAD# ,SEQUENCE# FROM V$ARCHIVED_LOG WHERE (THREAD#,FIRST_TIME ) IN
+(SELECT THREAD#,MAX(FIRST_TIME) FROM V$ARCHIVED_LOG GROUP BY THREAD#)) ARCH,
+(SELECT THREAD# ,SEQUENCE# FROM V$LOG_HISTORY WHERE (THREAD#,FIRST_TIME ) IN
+(SELECT THREAD#,MAX(FIRST_TIME) FROM V$LOG_HISTORY GROUP BY THREAD#)) APPL
+WHERE
+ARCH.THREAD# = APPL.THREAD#
+ORDER BY 1
+/
+
+
+or 
+
+select al.thrd "Thread", almax "Last Seq Received", lhmax "Last Seq Applied"
+from (select thread# thrd, max(sequence#) almax
+from v$archived_log
+where resetlogs_change#=(select resetlogs_change# from v$database)
+group by thread#) al,
+(select thread# thrd, max(sequence#) lhmax
+from v$log_history
+where first_time=(select max(first_time) from v$log_history)
+group by thread#) lh
+where al.thrd = lh.thrd;
+
+ Identify the missing archive log file. 
+SELECT THREAD#, LOW_SEQUENCE#, HIGH_SEQUENCE# FROM V$ARCHIVE_GAP;
+
+You could find which archive log file contains the change# 14025537844 by querying v$archived_log.
+
+SQL>select thread#, sequence#, name, first_change#, next_Change#, deleted, status from v$archived_log where 14025537844 between first_change# and next_Change#;
+
+
+================================================================================================================================================================================================================
+
+select dest_id,sequence#,applied
+from v$archived_log
+where dest_id=2
+ and sequence# > ( select max(sequence#) -10 from v$archived_log)
+order by sequence#
+
+
+ select thread#, max(sequence#) "Last Standby Seq Applied"
+           from v$archived_log val, v$database vdb
+           where val.resetlogs_change# = vdb.resetlogs_change#
+           and applied='YES'
+           group by thread# order by 1;
+
+SELECT THREAD# "Thread",SEQUENCE# "Last Sequence Generated"
+FROM V$ARCHIVED_LOG
+WHERE (THREAD#,FIRST_TIME ) IN (SELECT THREAD#,MAX(FIRST_TIME) FROM V$ARCHIVED_LOG GROUP BY THREAD#)
+ORDER BY 1
+
+
+
+=========================================================================================================================================
+
+Copy the archivelog to the space wher you have much space.
+
+mkdir -p /u02/ARCH
+cp  *.arch /u02/ARCH
+
+alter database recover managed standby database cancel;
+
+alter database recover automatic from '/u02/ARCH' standby database;
+
+you wil get error
+
+ERROR at line 1:
+ORA-00279: change 14963077231508 generated at 02/28/2020 17:02:48 needed for
+thread 2
+ORA-00289: suggestion : /u02/ARCH/2_349_1014547590.dbf
+ORA-00280: change 14963077231508 for thread 2 is in sequence #349
+ORA-00278: log file '/u02/ARCH/2_349_1014547590.dbf' no longer needed for this
+recovery
+ORA-00308: cannot open archived log '/u02/ARCH/2_349_1014547590.dbf'
+ORA-27037: unable to obtain file status
+Linux-x86_64 Error: 2: No such file or directory
+Additional information: 7
+
+Then use following sql 
+
+select process, thread#, sequence#, status from v$managed_standby where process='MRP0';
+
+No row
+alter database recover managed standby database cancel;
+ORA-16136: Managed Standby Recovery not active
+
+
+if we do again  >standbydb> alter database recover automatic from '/u02/ARCH/arch2_349_1014547590.dbf' standby database;
+
+ORA-00275: media recovery has already been started
+
+SQL> alter database recover automatic cancel;
+
+open the alertlog in different sesion to monitor the archivelog applied porcess
+
+ select * from
+  2   v$diag_info;
+
+
+ alter database recover  managed standby database disconnect from session;
+
+
+
+Using Incremnetal Backup.
+
+
+1) Stop the managed recovery process (MRP) on the STANDBY database
+ALTER DATABASE RECOVER MANAGED STANDBY DATABASE CANCEL;
+
+
+2)Determine the SCN of the STANDBY database.
+
+SELECT to_char(CURRENT_SCN) FROM V$DATABASE;
+
+SQL> SELECT to_char(CUR
+
+TO_CHAR(CURRENT_SCN)
+-----------------------
+14963059230550  ----standby database
+
+
+SQL> SELECT to_c
+
+TO_CHAR(CURRENT_
+----------------
+14963172665931-------Primary database
+
+You need to use the 'lowest SCN' from the above queries.  
+In the above example, that SCN would be 14963059230550 .  Therefore, from the above example, the backup would be taken from SCN 14963059230550.
+
+3) Take an incremental backup off the PRIMARY database
+
+eg:-database format 'G:\orabackup\BACKUP_DISK\Data_%U_%T.dbf'
+set NLS_DATE_FORMAT=’DD-MON-YY HH24:MI:SS’
+run
+{
+allocate channel d1 type disk;
+allocate channel d2 type disk;
+BACKUP INCREMENTAL FROM SCN 14963059230550 DATABASE FORMAT 'I:/ForStandby_%U_%T.bkp' tag 'FORSTANDBY';
+release channel d1;
+release channel d2;
+}
+
+4) Transfer all backup sets to STANDBY server.
+scp /tmp/ForStandby_* standby:/tmp
+
+5) Catalog the backups in STANDBY controlfile.
+
+CATALOG START WITH 'I:/ForStandby';
+
+6) Recover the STANDBY database with the cataloged incremental backup:
+
+run
+{
+allocate channel d1 type disk;
+allocate channel d2 type disk;
+RECOVER DATABASE NOREDO;
+release channel d1;
+release channel d2;
+}
+
+
+7) In RMAN, connect to the PRIMARY database and create a standby control file backup:
+set NLS_DATE_FORMAT=’DD-MON-YY HH24:MI:SS’
+
+run
+{
+allocate channel d1 type disk;
+allocate channel d2 type disk;
+BACKUP CURRENT CONTROLFILE FOR STANDBY FORMAT 'I:/ForStandbyCTRL_%U.bck';
+release channel d1;
+release channel d2;
+}
+
+
+8) Copy the standby control file backup to the STANDBY system.   If the backup is written to NFS device, this step can be skipped.
+$ scp /tmp/ForStandbyCTRL.bck standby:/tmp
+
+9) Capture datafile information in STANDBY database.
+spool standby_datafile_names.txt
+set pagesize 1000;
+set lines 200
+col name format a60
+select file#, name from v$datafile order by file# ;
+spool off
+
+
+
+10) From RMAN, connect to STANDBY database and restore the standby control file:
+
+
+SHUTDOWN IMMEDIATE ;
+RMAN> STARTUP NOMOUNT;
+
+run
+{
+allocate channel t1 type disk;
+allocate channel t2 type disk;
+RESTORE STANDBY CONTROLFILE FROM 'I:/FORSTANDBYCTRL_6BURB4AG_1_1.BCK';
+release channel t1;
+release channel t2;
+}
+
+FORSTANDBYCTRL_6BURB4AG_1_1.BCK
+11) Mount the standby:
+ALTER DATABASE MOUNT standby database;
+
+alter database recover managed standby database disconnect from session;
+
+
+========================================================================================================================================
+
+To disable the Active DataGuaard.
+
+First verify the Active DataGuard status.
+
+
+1)      select name,database_role,open_mode from v$database;
+NAME      DATABASE_ROLE    OPEN_MODE
+--------- ---------------- --------------------
+QME       PHYSICAL STANDBY READ ONLY WITH APPLY   ====. Read only with Apply.
+
+
+2)      [oracle@ux00816p STANDBY_BUILD_SCRIPT]$ srvctl config database -d QMES
+Database unique name: QMES
+Database name:
+Oracle home: /u01/app/oracle/product/12.2.0.1/dbhome_1
+Oracle user: oracle
+Spfile: +FLASH/QMES/PARAMETERFILE/spfile.322.1030047469
+Password file: +FLASH/QMES/PASSWORD/orapwqmes
+Domain: world
+Start options: open  ==========.  Its show the status open , its indicate Db still using the ADG.
+Stop options: immediate
+Database role: PHYSICAL_STANDBY
+Management policy: AUTOMATIC
+Server pools:
+Disk Groups: REDO,FLASH,RECO,DATA
+Mount point paths:
+Services:
+Type: RAC
+Start concurrency:
+Stop concurrency:
+OSDBA group: dba
+OSOPER group: dbaoper
+Database instances: QMES1,QMES2
+Configured nodes: ux00816p,ux00817p
+CSS critical: no
+CPU count: 0
+Memory target: 0
+Maximum memory: 0
+Default network number for database services:
+Database is administrator managed
+
+Step To Disable the Active DataGuard.
+
+srvctl stop database -d  QMES
+
+srvctl modify database -d QMES -s mount
+
+srvctl config database -d QMES.
+Check start option & its should be Mount.
+Start options: Mount
+
+Then start standby Database in Mount state.=.
+
+srvctl start database -d  QMES -o mount
+alter database recover  managed standby database disconnect from session;
+
+select name,database_role,open_mode from v$database;
+
+Check & verify Open_mode  value of the database. & it should be Mounted.
