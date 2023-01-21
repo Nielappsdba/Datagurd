@@ -1,0 +1,548 @@
+Today i recevied interesting Issue.
+
+1)Standby DB FRA was full.
+2)lucky go login to DB and increase the FRA.
+3)Use rman to delete the applied logs but it very slow. so below command not help much.
+
+
+sel_arch()
+{
+sqlplus -s "/ as sysdba" <<-EOF > /tmp/purge_arch.cmd
+set pages  0
+set lines  132
+set term   off
+set recsep off
+set feedback off
+
+select 'delete noprompt archivelog '''||name||''' device type disk;' from v\$archived_log where applied = 'YES'and deleted='NO';
+EOF
+}
+
+
+del_arch()
+{
+echo "Running file $DIR/purge_arch.cmd"
+cat /tmp/purge_arch.cmd
+rman target / <<-EOF
+@/tmp/purge_arch.cmd
+EOF
+}
+
+. /home/oracle/.env_qmes
+
+sel_arch
+del_arch
+
+4)I cleared log files from +FRA location , it was asm so rm the Archivelog files.
+5)Still did not help much and so i decided to do crosscheck archived log all;
+still same its was run for 5-6 hr it was terrific slow not sure ? open ticket with oracle.
+5)After 6 hr of marathon it was completed and i was able to delete the archivelogs.
+6)Also in between i change the location of archivelog for eg.
+recovery file dest was set so i change archived log.
+alter system set log_archive_dest_1='location='/u02/arc' scope=both;
+7)try to delete the archive log and still was hanged.
+8)so shut down the standby db and try to run crosscheck archivelog.
+so somehow i am able to delete the archivelog and so still not sure why its take time.
+9)I reset the log_archived dest.
+
+alter system reset log_archive_dest scope=both;
+and startup standby db and archivelog dest automatically set to FRA.
+
+10)I started the standby db and register the archivelog.which were not registered.
+
+sqlplus -s / as sysdba <<EOF
+select name from v\$database;
+set lines 200
+col name for a70
+
+set feedback off
+set heading off
+set lines 200
+set pages 0
+select 'alter database register logfile ' ||''''||name||''''||';'
+from v\$archived_log where APPLIED='NO';
+EOF
+
+
+11)Surprisely recevied error 
+
+alter database register logfile '+RECO/QMES/ARCHIVELOG/2022_11_22/thread_2_seq_11932.1108.1121411671'
+*
+ERROR at line 1:
+ORA-00308: cannot open archived log
+'+RECO/QMES/ARCHIVELOG/2022_11_22/thread_2_seq_11932.1108.1121411671'
+ORA-17503: ksfdopn:2 Failed to open file
++RECO/QMES/ARCHIVELOG/2022_11_22/thread_2_seq_11932.1108.1121411671
+ORA-15012: ASM file
+'+RECO/QMES/ARCHIVELOG/2022_11_22/thread_2_seq_11932.1108.1121411671' does not
+exist
+
+
+alter database register logfile '+RECO/QMES/ARCHIVELOG/2022_11_22/thread_1_seq_11875.1111.1121411627'
+*
+ERROR at line 1:
+ORA-00308: cannot open archived log
+'+RECO/QMES/ARCHIVELOG/2022_11_22/thread_1_seq_11875.1111.1121411627'
+ORA-17503: ksfdopn:2 Failed to open file
++RECO/QMES/ARCHIVELOG/2022_11_22/thread_1_seq_11875.1111.1121411627
+ORA-15012: ASM file
+'+RECO/QMES/ARCHIVELOG/2022_11_22/thread_1_seq_11875.1111.1121411627' does not
+exist
+
+Not able to find the archivelog. 
+
+12)look like archivedlog not there so i decided to use incremental backup to rebuild stanadby db.
+so i used below command to take incremental backup.
+
+Get the SCN from standby Datbabase.
+Determine the SCN of the STANDBY database.
+
+SELECT to_char(CURRENT_SCN) FROM V$DATABASE;
+
+13)Take backup on primary database.
+
+run
+{
+allocate channel c1 type disk;
+allocate channel c2 type disk;
+allocate channel c3 type disk;
+allocate channel c4 type disk;
+BACKUP INCREMENTAL FROM SCN $scn_no DATABASE FORMAT '$bkpdir/ForStandby_%U_%T.bkp' tag 'FORSTANDBY';
+BACKUP CURRENT CONTROLFILE FOR STANDBY FORMAT '$bkpdir/ForStandbyCTRL_%U.bck';
+release channel c1;
+release channel c2;
+release channel c3;
+release channel c4;
+}
+
+14)Recover DATABASE Using below command.
+Cancel the recovery on standby DATABASE.
+alter database recover managed standby database cancel;
+
+[oracle@ux00816p STANDBY_BUILD_SCRIPT]$ cat inc_recover.sh
+rec()
+{
+rman target / <<-EOF > $logfile
+run
+{
+allocate channel d1 type disk;
+allocate channel d2 type disk;
+allocate channel d3 type disk;
+allocate channel d4 type disk;
+recover database NOREDO;
+release channel d1;
+release channel d2;
+release channel d3;
+release channel d4;
+}
+EOF
+}
+
+catalog_inc()
+{
+echo "IF YOU CANNOT CATALOG, CREATE DIRECTORY AND MOVE FILES TO NEW DIRECTORY"
+rman target /  <<-EOF
+catalog start with '$loc' NOPROMPT;
+EOF
+}
+
+catalog_inc
+rec
+
+15).Restore primary DB backup controlfile.
+
+shut immediate
+startup nomount
+restore_controlfile()
+{
+rman target /  <<-EOF
+run
+{
+allocate channel d1 type disk;
+restore standby controlfile from '$loc/ForStandbyCTRL_lv1ib7cc_1_1.bck';
+release channel d1;
+sql 'alter database mount standby database';
+}
+EOF
+}
+
+export ORACLE_SID=QMES1
+export NLS_DATE_FORMAT="DD-MON-YY HH24:MI:SS"
+ls -ld /u02/build-std-bkp
+loc="/u02/build-std-bkp"
+logfile=/tmp/gap_res.log
+restore_controlfile
+
+16)startup mount.
+Verify the Datafile using Rman.
+
+Report schema;
+
+File Size(MB) Tablespace           RB segs Datafile Name
+---- -------- -------------------- ------- ------------------------
+1    0        SYSTEM               ***     +FLASH/QMES/DATAFILE/system.316.1116121003
+2    0        USERS                ***     +FLASH/QME/DATAFILE/users.274.1028672769
+3    0        SYSAUX               ***     +FLASH/QME/DATAFILE/sysaux.291.1028674517
+4    0        UNDOTBS1             ***     +FLASH/QME/DATAFILE/undotbs1.292.1028674533
+5    0        UNDOTBS2             ***     +FLASH/QME/DATAFILE/undotbs2.293.1028674551
+6    0        DATA                 ***     +FLASH/QME/DATAFILE/data.275.1028672777
+7    0        DATA                 ***     +FLASH/QME/DATAFILE/data.276.1028672795
+8    0        INDEXES              ***     +FLASH/QME/DATAFILE/indexes.277.1028672803
+9    0        SHOP_AREA            ***     +FLASH/QME/DATAFILE/shop_area.278.1028672809
+10   0        SHOP_AREA            ***     +FLASH/QME/DATAFILE/shop_area.279.102867282
+
+Interesting , still datafile path show "+FLASH/QME/DATAFILE/" which is actual location of primary DB datafile.
+
+Standby  DB DATAFILE location is "+FLASH/QMES/DATAFILE/" so getting multiple alerts on alerts logs.
+
+
+RMAN> list copy of database;
+
+using target database control file instead of recovery catalog
+
+List of Datafile Copies
+=======================
+
+Key     File S Completion Time Ckp SCN    Ckp Time        Sparse
+------- ---- - --------------- ---------- --------------- ------
+437     1    A 20-JAN-23       14964256227254 19-JAN-23       NO
+        Name: +FLASH/QMES/DATAFILE/system.316.1116121003===========> Actual location of datafile on standby db sites.
+
+441     2    A 20-JAN-23       14964256227257 19-JAN-23       NO
+        Name: +FLASH/QMES/DATAFILE/users.336.1116121057
+
+429     3    A 20-JAN-23       14964256227254 19-JAN-23       NO
+        Name: +FLASH/QMES/DATAFILE/sysaux.300.1116120825
+
+438     4    A 20-JAN-23       14964256227261 19-JAN-23       NO
+        Name: +FLASH/QMES/DATAFILE/undotbs1.315.1116121033
+
+439     5    A 20-JAN-23       14964256227259 19-JAN-23       NO
+        Name: +FLASH/QMES/DATAFILE/undotbs2.319.1116121045
+
+
+17) Next target is how to fix this issue. two command step. 
+
+CATALOG START WITH '+FLASH'
+SWITCH DATABASE TO COPY;
+
+This two step will update the controlfile with correct path but in my case rman again started slow so 
+some how i executed this command and it take me 6 hr to complete. I still remember i did not use nonprompt 
+option in catalog start with command. so i messed something.
+so above two option i loose in my case.
+18) Now what next Then i used manual method to do this , i create small shell script 
+and capture source and target datafile in two file and using while loop i cascase into on file as show below.
+
+datafile number are match from both above output.
+
+run
+{
+switch datafile '+FLASH/QME/DATAFILE/sysaux.291.1028674517' to datafilecopy '+FLASH/QMES/DATAFILE/sysaux.300.1116120825'
+switch datafile '+FLASH/QME/DATAFILE/undotbs1.292.1028674533' to datafilecopy '+FLASH/QMES/DATAFILE/undotbs1.315.1116121033'
+switch datafile '+FLASH/QME/DATAFILE/undotbs2.293.1028674551' to datafilecopy '+FLASH/QMES/DATAFILE/undotbs2.319.1116121045'
+switch datafile '+FLASH/QME/DATAFILE/data.275.1028672777' to datafilecopy '+FLASH/QMES/DATAFILE/data.312.1116120841'
+switch datafile '+FLASH/QME/DATAFILE/data.276.1028672795' to datafilecopy '+FLASH/QMES/DATAFILE/data.337.1116121071'
+switch datafile '+FLASH/QME/DATAFILE/indexes.277.1028672803' to datafilecopy '+FLASH/QMES/DATAFILE/indexes.335.1116121049'
+switch datafile '+FLASH/QME/DATAFILE/shop_area.278.1028672809' to datafilecopy '+FLASH/QMES/DATAFILE/shop_area.301.1116120871'
+}
+
+19) This will help to rename datafile and updated controlfile with correct name.
+But i later realized datafile 38,39,40 not actually created on stanadby db they are missing on showing 0 value in below output.
+
+Report schema
+List of Permanent Datafiles
+===========================
+File Size(MB) Tablespace           RB segs Datafile Name
+---- -------- -------------------- ------- ------------------------
+File Size(MB) Tablespace           RB segs Datafile Name
+---- -------- -------------------- ------- ------------------------
+1    8124     SYSTEM               ***     +FLASH/QMES/DATAFILE/system.316.1116121003
+2    5124     USERS                ***     +FLASH/QMES/DATAFILE/users.336.1116121057
+3    10240    SYSAUX               ***     +FLASH/QMES/DATAFILE/sysaux.300.1116120825
+. Due long output the truncate other files name.
+.
+37   0        SHAPE_HYP_TPSS       ***     +FLASH/QME/DATAFILE/shape_hyp_tpss.357.1121414575
+38   0        SHAPE_HYP_TPSS       ***     +FLASH/QME/DATAFILE/shape_hyp_tpss.358.1121414655
+39   0        SHAPE_HYP_TPSS       ***     +FLASH/QME/DATAFILE/shape_hyp_tpss.359.1123490437
+
+
+Not sure what to do in this case. Againg i tried to do recovery of standby database but no luck.
+recover database NOREDO;
+
+Standby DB level you can identify using below command.
+
+Select hxfil "fileno",con_id,hxfnm "name"  from x$kcvfh where fhscn=0 order by con_id  ;
+
+Set linesize 1000
+Set heading off
+Set verify off ;
+
+spool /path/setnewnamedf.sql
+
+select 'alter database rename file '''||d.name|| ''' to '''||c.name||''';' from v$datafile d join v$datafile_copy c using (file#) where length(c.name) > 1 and c.checkpoint_time > (sysdate-1) and file# in (Select hxfil from x$kcvfh where fhscn=0) ;
+
+Spool off
+
+@/path/setnewnamedf.sql
+
+
+20) Then I took backup of missing datafile from primary DB.
+
+run
+{
+allocate channel c1 type disk;
+allocate channel c2 type disk;
+allocate channel c3 type disk;
+allocate channel c4 type disk;
+BACKUP DATAFILE 37,38,39 FORMAT '$bkpdir/missdf%U_%T.bkp' tag 'MISSDATAFILE';
+release channel c1;
+release channel c2;
+release channel c3;
+release channel c4;
+}
+EOF
+}
+
+21)on STANDBY DB site.set below value before start of restoration.
+stanadby_file_management=Manual 
+cancel the recovery.
+catalog the backup of datafile using below command.
+catalog start with '$loc' NOPROMPT;
+or
+catalog start with '/u02/build-std-bkp/missdf0i1idhe9_1_1_20230120.bkp';
+catalog start with '/u02/build-std-bkp/missdf0j1idhe9_1_1_20230120.bkp' noprompt;
+catalog start with '/u02/build-std-bkp/missdf0k1idhe9_1_1_20230120.bkp' noprompt;
+
+rman target / <<-EOF > $logfile
+run
+{
+allocate channel d1 type disk;
+allocate channel d2 type disk;
+allocate channel d3 type disk;
+allocate channel d4 type disk;
+restore datafile 37;
+restore datafile 38;
+restore datafile 39;
+release channel d1;
+release channel d2;
+release channel d3;
+release channel d4;
+exit;
+}
+EOF
+}
+
+It will automatically restore under "+FLASH/QMES/DATAFILE" location with new asm name.
+How its happened ? DB_unique_name, DB_FILE_create_dest and omf datafile and asm.
+
+22)After successful restoration.
+
+RMAN>report schema.
+....
+
+37   20480    SHAPE_HYP_TPSS       ***     +FLASH/QMES/DATAFILE/shape_hyp_tpss.391.1126635219
+38   20480    SHAPE_HYP_TPSS       ***     +FLASH/QMES/DATAFILE/shape_hyp_tpss.389.1126635503
+39   20480    SHAPE_HYP_TPSS       ***     +FLASH/QMES/DATAFILE/shape_hyp_tpss.388.1126635599
+
+23)bounce standby DB , still i am getting the standby and redolog error on primary DB becuase its showing the location from control
+file which is pointed to "+RECO/QME/ONLINELOG" 
+Actual location on stanadby db is "+RECO/QMES/ONLINELOG" its different. After restore missing datafile db was up and running. fine.
+Alertlog showing mutiple error Not able to found the redolog and stanadby. So what i did.
+
+
+Redo logs on standby DB.
+set lines 200
+col member for a10
+col STATUS for a16
+
+UX00816P:(SYS@QMES:PHYSICAL STANDBY> select GROUP#,THREAD#,MEMBERS,STATUS from V$log;
+
+    GROUP#    THREAD#    MEMBERS STATUS
+---------- ---------- ---------- ----------------
+         1          1          1 Current
+         2          1          1 UNUSED
+         3          2          1 UNUSED
+         4          2          1 CURRENT
+		 
+Standby Redo logs ====> this is not current status but i have to drop the stanadby redlog file 
+
+ select group#, thread#, status, bytes from v$standby_log;
+    GROUP#    THREAD# STATUS                BYTES
+---------- ---------- ---------------- ----------
+         5          1 UNASSIGNED       4294967296
+         6          1 UNASSIGNED          4294967296
+         7          1 UNASSIGNED       4294967296
+         8          2 UNASSIGNED       4294967296
+         9          2 UNASSIGNED         4294967296
+UX00816P:(SYS@QMES:PHYSICAL STANDBY>
+
+24)Standby DB site :Drop the STANDBY redolog and recreate with new location .
+ALTER DATABASE CLEAR LOGFILE GROUP &a;
+ALTER DATABASE DROP LOGFILE GROUP &b;
+
+select group# from v$standby_log;
+select group#, thread#, status, bytes from v$standby_log;
+
+alter database add standby logfile thread 1 group 5  size 4g;
+alter database add standby logfile thread 1 group 6  size 4g;
+alter database add standby logfile thread 1 group 7  size 4g;
+alter database add standby logfile thread 2 group 8 size 4g;
+alter database add standby logfile thread 2 group 9  size 4g;
+
+syntax : Alter database add logfile Thread <thread no> group <group no> size <>M;
+Non-ASM
+alter database add standby logfile thread 1 group 5 '/u01/oradata/standby_redo01.log' size 524288000;
+
+
+UX00816P:(SYS@QMES:PHYSICAL STANDBY> select group#, thread#, status, bytes from v$standby_log;
+
+    GROUP#    THREAD# STATUS                BYTES
+---------- ---------- ---------------- ----------
+         5          1 UNASSIGNED       4294967296
+         6          1 ACTIVE           4294967296
+         7          1 UNASSIGNED       4294967296
+         8          2 UNASSIGNED       4294967296
+         9          2 ACTIVE           4294967296
+
+select member,TYPE,STATUS from v$logfile
+Where type='STANDBY';
+
+MEMBER                                            TYPE    STATUS
+------------------------------------------------- ------- ----------------
++REDO/QMES/ONLINELOG/group_5.309.1126645303       STANDBY
++REDO/QMES/ONLINELOG/group_6.277.1126645307       STANDBY
++REDO/QMES/ONLINELOG/group_7.287.1126645309       STANDBY
++REDO/QMES/ONLINELOG/group_8.286.1126645311       STANDBY
++REDO/QMES/ONLINELOG/group_9.285.1126645315       STANDBY
+
+STANDBY redog log issue resolved , each group containg one group.
+for eg group 5 contained only one standby redlog member.
+
+Now lets corrected the Online redo log error messages which are coming on alertlog.
+
+UX00816P:(SYS@QMES:PHYSICAL STANDBY>  select group#, thread#, status, bytes from v$log;
+
+    GROUP#    THREAD# STATUS                BYTES
+---------- ---------- ---------------- ----------
+         1          1 CURRENT          4294967296 ======> its show current 
+         2          1 UNUSED           4294967296
+         3          2 UNUSED           4294967296
+         4          2 CURRENT          4294967296===>its show current 
+		 
+Wow intersting lets try to drop out.
+
+UX00816P:(SYS@QMES:PHYSICAL STANDBY> ALTER DATABASE DROP LOGFILE GROUP &b;
+Enter value for b: 1
+ALTER DATABASE DROP LOGFILE GROUP 1
+*
+ERROR at line 1:
+ORA-01623: log 1 is current log for instance QMES1 (thread 1) - cannot drop
+ORA-00312: online log 1 thread 1: '+REDO/QME/ONLINELOG/group_1.280.1014547591'
+
+STANDBY db in mount state and redo log are showing current.So why 
+
+so i dropped the group# 2,4 Then add 
+
+alter database add logfile thread 1 group 2 size 4g;
+alter database add logfile thread 2 group 3 size 4g;
+
+ALTER DATABASE CLEAR LOGFILE GROUP &a;
+ALTER DATABASE DROP LOGFILE GROUP &b;
+
+select group#, thread#, status, bytes from v$log;
+
+    GROUP#    THREAD# STATUS                BYTES
+---------- ---------- ---------------- ----------
+         1          1 CURRENT          4294967296 ======> its show current 
+         2          1 UNUSED           4294967296
+         3          2 UNUSED           4294967296
+         4          2 CURRENT          4294967296===>its show current 
+		 
+Still its showing , so i decided to open a db in read only mode , i thought this step would help.
+
+UX00816P:(SYS@QMES:PHYSICAL STANDBY> ALTER DATABASE OPEN READ ONLY;
+
+Media Recovery Log +RECO/QMES/ARCHIVELOG/2023_01_20/thread_2_seq_14673.1347.1126622327
+2023-01-20T21:26:16.083065+00:00
+Media Recovery Log +RECO/QMES/ARCHIVELOG/2023_01_20/thread_1_seq_14654.1354.1126622329
+2023-01-20T21:26:16.321501+00:00
+Media Recovery Log +RECO/QMES/ARCHIVELOG/2023_01_20/thread_1_seq_14655.1350.1126623603
+2023-01-20T21:26:16.559274+00:00
+Media Recovery Log +RECO/QMES/ARCHIVELOG/2023_01_20/thread_2_seq_14674.1349.1126623605
+
+its started to apply the all archivelog which are not applied.
+also  to resolve the redo log issue 
+
+alter system switch logfile;
+not worked on standby becuase its reaonly.
+ALTER DATABASE CLEAR LOGFILE GROUP 1;==============> This worked.
+
+I bounce standby DB and started again in Mount state.
+
+Still no luck Redo log still show current.
+
+UX00816P:(SYS@QMES:PHYSICAL STANDBY> select group#, thread#, status, bytes from v$log;
+
+    GROUP#    THREAD# STATUS                BYTES
+---------- ---------- ---------------- ----------
+         1          1 CURRENT          4294967296
+         2          1 UNUSED           4294967296
+         3          2 UNUSED           4294967296
+         4          2 CURRENT          4294967296
+
+
+so i decided to used below command again.
+
+ALTER DATABASE CLEAR LOGFILE GROUP &a;====> This run successful
+ALTER DATABASE DROP LOGFILE GROUP &b;===> Due to current flag not able drop
+
+alter database clear unarchived logfile group 1;===>Run successful.
+
+At this point i was clueless ? becuase i bounce stanadby db again and in standby db alertlog 
+no redolog error so look its worked. But still the location for group# 1,4 showing "+REDO/QME/ONLINELOG/" 
+
+25)Then finally i decided lets bounce standby db and set standby_file_management=auto. and start recovery.
+
+26) Again i checked then it show below status , Wow Oracle automatically update the path of online redolog 
+and also current status to unused perfect. 
+
+UX00816P:(SYS@QMES:PHYSICAL STANDBY> select GROUP#,THREAD#,MEMBERS,STATUS from V$log;
+
+    GROUP#    THREAD#    MEMBERS STATUS
+---------- ---------- ---------- ----------------
+         1          1          1 UNUSED
+         2          1          1 UNUSED
+         3          2          1 UNUSED
+         4          2          1 UNUSED
+UX00816P:(SYS@QMES:PHYSICAL STANDBY> select member,TYPE,STATUS from v$logfile
+  2  where type='ONLINE';
+
+MEMBER                                            TYPE    STATUS
+------------------------------------------------- ------- ----------------
++REDO/QMES/ONLINELOG/group_2.284.1126646465       ONLINE 
++REDO/QMES/ONLINELOG/group_1.282.1126647155       ONLINE
++REDO/QMES/ONLINELOG/group_3.283.1126646469       ONLINE
++REDO/QMES/ONLINELOG/group_4.281.1126647223       ONLINE
+
+
+In this way i make my standby DB consistent  and  lots of up and down i have to faced during this activity.
+
+
+Reference:
+
+Datafile related MOS notes.
+Step By Step Guide On How To Recreate Standby Control File When Datafiles Are On ASM And Using Oracle Managed Files (Doc ID 734862.1)
+use this perfect for asm .
+Recovering the primary database's datafile using the physical standby, and vice versa (Doc ID 453153.1)
+Rman Incremental Roll Forward on Standby using Document 836986.1 Failing On step 12 during Switch database to copy RMAN-06571: 
+datafile <n> does not have recoverable copy (Doc ID 2818104.1)
+RMAN-06094 or RMAN-06571 During Recovery or Switch to Copy at Standby Site (Doc ID 1339439.1)
+RMAN Catalog Start with'<>' Failed with no files found and RMAN-06571 (Doc ID 1315732.1)
+
+
+Online log/Standby log error MOS notes.
+ORA-19527: physical standby redo log must be renamed (Doc ID 2
+822301.1)
+Handling ORL and SRL (Resize) on Primary and Physical Standby in Data Guard Environment (Doc ID 1532566.1)
+How to Drop/recreate A Standby Redo Log Group From Standby Database Which is Active status (Doc ID 2516522.1)
+Online Redo Logs on Physical Standby (Doc ID 740675.1)
