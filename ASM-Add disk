@@ -1,0 +1,111 @@
+lsdsk -k --candidate
+lsdsk -k -G ORADATA
+
+ASMCMD> lsdsk -k -G ORADATA
+Total_MB  Free_MB   OS_MB  Name          Failgroup     Site_Name  Site_GUID                         Site_Status  Failgroup_Type  Library   Path
+  256000      344  256000  ORADATA_0003  ORADATA_0003             00000000000000000000000000000000               REGULAR         System    /dev/mapper/ORADATA1P1_new
+  256000      392  256000  ORADATA_0004  ORADATA_0004             00000000000000000000000000000000               REGULAR         System    /dev/mapper/ORADATA2P1_new
+  256000      420  256000  ORADATA_0005  ORADATA_0005             00000000000000000000000000000000               REGULAR         System    /dev/mapper/ORADATA3P1_new
+  
+ASMCMD>
+
+New Name would be 
+
+Multipath.
+
+[grid@uq00466p ~]$ ls -ltr /dev/mapper/ORADATA3P1_new
+lrwxrwxrwx 1 root root 8 Dec 27 14:05 /dev/mapper/ORADATA3P1_new -> ../dm-11
+
+[grid@uq00466p mapper]$ ls -ltr /dev/dm-11
+brw-rw---- 1 root oinstall 253, 11 Jan  5 04:16 /dev/dm-11
+[grid@uq00466p mapper]$
+
+1. alter diskgroup ORADATA add disk '/dev/mapper/ORADATA4P1_new' rebalance power 10;
+
+
+
+How to create dummy to test.
+
+1.create diskgroup TESTDG  external redundancy  disk '/dev/mapper/ORADATA4P1_new' ;
+
+once disk group created on node1.
+
+on node2 
+
+2.alter diskgroup TESTDG Mount;
+
+
+Use below command to check the status.
+
+3.select inst_id, group_number, name, state, total_mb, free_mb from gv$asm_diskgroup;
+
+once this disk is mounted its indicate 
+
+on Node2.
+4.alter diskgroup TESTDG dismount;
+
+Node1
+5.Drop diskgroup TESTDG;
+********************************************************************
+
+After this  step then you can follow step 1.
+
+*****************************************************************************
+[grid@uq00466p mapper]$ cat /proc/cpuinfo | grep proc
+processor       : 0
+processor       : 1
+processor       : 2
+processor       : 3
+processor       : 4
+processor       : 5
+processor       : 6
+processor       : 7
+processor       : 8
+processor       : 9
+processor       : 10
+processor       : 11
+processor       : 12
+processor       : 13
+processor       : 14
+processor       : 15
+processor       : 16
+processor       : 17
+processor       : 18
+processor       : 19
+processor       : 20
+processor       : 21
+processor       : 22
+processor       : 23
+processor       : 24
+processor       : 25
+processor       : 26
+processor       : 27
+processor       : 28
+processor       : 29
+processor       : 30
+processor       : 31
+processor       : 32
+processor       : 33
+processor       : 34
+processor       : 35
+processor       : 36
+processor       : 37
+processor       : 38
+processor       : 39
+
+
+[grid@uq00466p ~]$ cd /dev/mapper/
+[grid@uq00466p mapper]$ ls
+3624a9370d5aa463fce1af13700011f2f  3624a9370d5aa463fce1af1370001276a  OCR_VOTE02P1_new  ORADATA1P1_new  ORAFRA1P1_new  vgora-u03    vgos-lvswap
+3624a9370d5aa463fce1af13700011f30  3624a9370d5aa463fce1af137000127a2  OCR_VOTE03P1_new  ORADATA2P1_new  ORAFRA2P1_new  vgos-lvhome  vgos-lvtmp
+3624a9370d5aa463fce1af13700011f31  control                            ORAARC1P1_new     ORADATA3P1_new  vgora-u01      vgos-lvopt   vgos-lvusr
+3624a9370d5aa463fce1af13700011f32  OCR_VOTE01P1_new                   ORAARC2P1_new     ORADATA4P1      vgora-u02      vgos-lvroot  vgos-lvvar
+[grid@uq00466p mapper]$ ls -ltr /dev/dm-
+dm-0   dm-10  dm-12  dm-14  dm-16  dm-18  dm-2   dm-21  dm-23  dm-25  dm-3   dm-5   dm-7   dm-9
+dm-1   dm-11  dm-13  dm-15  dm-17  dm-19  dm-20  dm-22  dm-24  dm-26  dm-4   dm-6   dm-8
+[grid@uq00466p mapper]$ ls -ltr /dev/dm-
+dm-0   dm-10  dm-12  dm-14  dm-16  dm-18  dm-2   dm-21  dm-23  dm-25  dm-3   dm-5   dm-7   dm-9
+dm-1   dm-11  dm-13  dm-15  dm-17  dm-19  dm-20  dm-22  dm-24  dm-26  dm-4   dm-6   dm-8
+[grid@uq00466p mapper]$ ls -ltr /dev/dm-
+dm-0   dm-10  dm-12  dm-14  dm-16  dm-18  dm-2   dm-21  dm-23  dm-25  dm-3   dm-5   dm-7   dm-9
+dm-1   dm-11  dm-13  dm-15  dm-17  dm-19  dm-20  dm-22  dm-24  dm-26  dm-4   dm-6   dm-8
